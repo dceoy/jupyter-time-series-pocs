@@ -1,0 +1,24 @@
+---
+version: '3'
+
+services:
+  jupyter:
+    container_name: jupyter
+    image: dceoy/jupyter:latest
+    user: ${UID}:${GID}
+    userns_mode: host
+    ports:
+      - 8888:8888
+    volumes:
+      - ${PWD}:/nb
+    working_dir: /nb
+    entrypoint:
+      - jupyter
+    command:
+      - notebook
+      - --port=8888
+      - --ip=0.0.0.0
+      - --notebook-dir=/nb
+      - --allow-root
+      - --no-browser
+      - --NotebookApp.token=''
