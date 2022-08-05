@@ -5,17 +5,18 @@ import os
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize_scalar
+from scipy.optimize import minimize
 
 
 class KalmanFilter(object):
-    def __init__(self, x0=0, v0=1e-8, q=1e-8, r=1e-8, keep_history=False):
-        self.x = np.array([x0])                 # estimate of x
-        self.v = np.array([v0])                 # error estimate
-        self.q = q                              # process variance
-        self.r = r                              # measurement variance
-        self.y = np.array([np.nan])
+    def __init__(self, x0=0.0, v0=1.0, q=1.0, r=1.0, keep_history=False):
+        self.x = np.array([x0])             # estimate of x
+        self.v = np.array([v0])             # error estimate
+        self.q = q                          # process variance
+        self.r = r                          # measurement variance
+        self.y = np.array([np.nan])         # observation
         self.__keep_history = keep_history
+        self.__logger.debug('vars(self): {}'.format(vars(self)))
 
     def fit(self, y, x0=None, v0=None, q=None, r=None):
         x0_ = x0 or self.x[-1]
@@ -45,33 +46,31 @@ class KalmanFilter(object):
 
 
 class KalmanFilterOptimizer(object):
-    def __init__(self, y, x0=0, v0=1e-8, pmv_ratio=1, method='Golden'):
+    def __init__(self, y, x0=0.0, v0=1.0, q0=1.0, r0=1.0, method='L-BFGS-B'):
         self.__logger = logging.getLogger(__name__)
-        self.y = y
-        self.x0 = x0
-        self.v0 = v0
-        self.__pmv_ratio = pmv_ratio    # process / measurement variance ratio
-        self.__method = method          # Brent | Bounded | Golden
+        self.x0 = x0                    # estimate of x
+        self.v0 = v0                    # error estimate
+        self.q0 = q0                    # process variance
+        self.r0 = r0                    # measurement variance
+        self.__method = method          # method for scipy.optimize.minimize()
+        self.__logger.debug('vars(self): {}'.format(vars(self)))
 
-    def optimize(self):
-        res = minimize_scalar(
-            fun=self._loss, args=(self.y, self.x0, self.v0, self.__pmv_ratio),
-            method=self.__method
+    def optimize(self, y):
+        res = minimize(
+            fun=self._loss, x0=np.array([self.q0, self.r0]),
+            args=(y, self.x0, self.v0), method=self.__method
         )
-        self.__logger.debug(f'{os.linesep}{res}')
-        r = np.exp(res.x)
-        self.__logger.debug(f'measurement variance:\t{r}')
-        q = r * self.__pmv_ratio
-        self.__logger.debug(f'process variance:\t{q}')
+        self.__logger.info(f'{os.linesep}{res}')
+        q = res.x[0]
+        self.__logger.info(f'process variance: {q}')
+        r = res.x[1]
+        self.__logger.info(f'measurement variance: {r}')
         return q, r
 
     @staticmethod
-    def _loss(a, y, x0, v0, pmv_ratio=1):
-        r = np.exp(a)
+    def _loss(x, *args):
         return KalmanFilter(
-            x0=x0, v0=v0, q=(r * pmv_ratio), r=r
-        ).fit(y=y).pipe(
-            lambda d: np.sum(
-                np.log(d['v'] + r) + np.square(d['y'] - d['x']) / (d['v'] + r)
-            )
+            x0=args[1], v0=args[2], q=x[0], r=x[1], keep_history=True
+        ).fit(y=args[0]).pipe(
+            lambda d: np.sum(np.square(d['y'] - d['x']))
         )
