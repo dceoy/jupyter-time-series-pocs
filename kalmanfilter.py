@@ -2,6 +2,7 @@
 
 import logging
 import os
+from pprint import pformat
 
 import numpy as np
 import pandas as pd
@@ -29,12 +30,14 @@ class KalmanFilter(object):
         len_y = len(y)
         new_x = np.empty(len_y)
         new_v = np.empty(len_y)
-        for i, y_n in enumerate(y):
-            x_n_1 = (new_x[i - 1] if i else x0_)
-            v_n_1 = (new_v[i - 1] if i else v0_) + q_
-            k = v_n_1 / (v_n_1 + r_)
-            new_x[i] = x_n_1 + k * (y_n - x_n_1)
-            new_v[i] = (1 - k) * v_n_1
+        with np.errstate(divide='raise', over='raise', under='raise',
+                         invalid='raise'):
+            for i, y_n in enumerate(y):
+                x_n_1 = (new_x[i - 1] if i else x0_)
+                v_n_1 = (new_v[i - 1] if i else v0_) + q_
+                k = v_n_1 / (v_n_1 + r_)
+                new_x[i] = x_n_1 + k * (y_n - x_n_1)
+                new_v[i] = (1 - k) * v_n_1
         if self.__keep_history:
             self.x = np.append(self.x, new_x)
             self.v = np.append(self.v, new_v)
@@ -49,41 +52,57 @@ class KalmanFilter(object):
         )
 
     def calculate_log_likelihood(self, *args, **kwargs):
-        return self.filter(*args, **kwargs).reset_index().pipe(
-            lambda d: np.sum(
-                np.log(
-                    norm.pdf(
-                        x=d['y'], loc=d['x'].shift(),
-                        scale=np.sqrt(d['v']).shift()
-                    )[1:]
+        with np.errstate(divide='raise', over='raise', under='raise',
+                         invalid='raise'):
+            try:
+                loglik = self.filter(*args, **kwargs).pipe(
+                    lambda d: np.sum(
+                        np.log(
+                            norm.pdf(
+                                x=d['y'], loc=d['x'].shift(),
+                                scale=np.sqrt(d['v']).shift()
+                            )[1:]
+                        )
+                    )
                 )
-            )
-        )
+            except FloatingPointError:
+                loglik = -np.inf
+        return loglik
 
 
 class OptimizedKalmanFilter(object):
     def __init__(self, y, x0=None, v0=None, q0=None, r0=None,
-                 method='L-BFGS-B', keep_history=False):
+                 keep_history=False, q_bound=None, r_bound=None,
+                 method='L-BFGS-B', **kwargs):
         self.__logger = logging.getLogger(__name__)
+        assert (~np.isnan(y)).all(), f'y contains nan: {y}'
         self.y = y                                  # observation
         self.x0 = (y.mean() if x0 is None else x0)  # estimate of x
         y_var = y.var()
         self.v0 = (y_var if v0 is None else v0)     # error estimate
         self.q0 = (y_var if q0 is None else q0)     # process variance
         self.r0 = (y_var if r0 is None else r0)     # measurement variance
-        self.__method = method          # method for scipy.optimize.minimize()
+        self.__logger.info(
+            f'self.x0: {self.x0}, self.v0: {self.v0}'
+            + f', self.q0: {self.q0}, self.r0: {self.r0}'
+        )
+        self.q_bound = (q_bound or (0, np.inf))
+        self.r_bound = (r_bound or (0, np.inf))
+        self.method = method
+        self.scipy_optimize_minimize_add_kwargs = kwargs
         self.__keep_history = keep_history
         self.q = None
         self.r = None
         self.kf = None
-        self.optimize_parameters()
-        self.__logger.debug('vars(self): {}'.format(vars(self)))
+        self.__logger.debug('vars(self):' + os.linesep + pformat(vars(self)))
 
-    def optimize_parameters(self, **kwargs):
+    def optimize_kf(self):
+        np.seterr(all='raise')
         res = minimize(
             fun=self._loss, x0=np.array([self.q0, self.r0]),
-            args=(self.y, self.x0, self.v0), method=self.__method,
-            bounds=((0, None), (0, None)), **kwargs
+            args=(self.y, self.x0, self.v0), method=self.method,
+            bounds=[self.q_bound, self.r_bound],
+            **self.scipy_optimize_minimize_add_kwargs
         )
         if res.success:
             self.__logger.info(f'{os.linesep}{res}')
@@ -98,12 +117,21 @@ class OptimizedKalmanFilter(object):
             x0=self.x0, v0=self.v0, q=self.q, r=self.r,
             keep_history=self.__keep_history
         )
+        self.__logger.debug(
+            'vars(self.kf):' + os.linesep + pformat(vars(self.kf))
+        )
 
     @staticmethod
     def _loss(x, *args):
-        return -KalmanFilter(
-            x0=args[1], v0=args[2], q=x[0], r=x[1], keep_history=False
-        ).calculate_log_likelihood(y=args[0])
+        if (x <= 0).any():
+            return np.inf
+        else:
+            return -KalmanFilter(
+                x0=args[1], v0=args[2], q=x[0], r=x[1], keep_history=False
+            ).calculate_log_likelihood(y=args[0])
 
-    def filter(self, y=None, **kwargs):
-        return self.kf.filter(y=(self.y if y is None else y), **kwargs)
+    def filter(self, y=None, optimize=False, **kwargs):
+        new_y = (self.y if y is None else y)
+        if optimize or not self.kf:
+            self.optimize_kf()
+        return self.kf.filter(y=new_y, **kwargs)
