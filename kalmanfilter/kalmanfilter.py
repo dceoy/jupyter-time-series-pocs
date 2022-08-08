@@ -12,8 +12,8 @@ from scipy.stats import norm
 
 class KalmanFilter(object):
     def __init__(self, x0=0.0, v0=1.0, q=1.0, r=1.0, keep_history=False):
-        self.x = np.array([x0])             # estimate of x
-        self.v = np.array([v0])             # error estimate
+        self.x = np.array([x0])             # state estimate
+        self.v = np.array([v0])             # estimate variance
         self.q = q                          # process variance
         self.r = r                          # measurement variance
         self.y = np.array([np.nan])         # observation
@@ -98,18 +98,18 @@ class OptimizedKalmanFilter(object):
 
     def optimize_kf(self):
         np.seterr(all='raise')
-        res = minimize(
+        result = minimize(
             fun=self._loss, x0=np.array([self.q0, self.r0]),
             args=(self.y, self.x0, self.v0), method=self.method,
             bounds=[self.q_bound, self.r_bound],
             **self.scipy_optimize_minimize_add_kwargs
         )
-        if res.success:
-            self.__logger.info(f'{os.linesep}{res}')
+        if result.success:
+            self.__logger.info(f'result:{os.linesep}{result}')
         else:
-            self.__logger.error(f'{os.linesep}{res}')
-        assert res.success, res.message
-        self.q, self.r = res.x
+            self.__logger.error(f'result:{os.linesep}{result}')
+        assert result.success, result.message
+        self.q, self.r = result.x
         self.__logger.info(
             f'process and measurement variances: {self.q}, {self.r}'
         )
@@ -130,8 +130,14 @@ class OptimizedKalmanFilter(object):
                 x0=args[1], v0=args[2], q=x[0], r=x[1], keep_history=False
             ).calculate_log_likelihood(y=args[0])
 
-    def filter(self, y=None, optimize=False, **kwargs):
-        new_y = (self.y if y is None else y)
-        if optimize or not self.kf:
+    def filter(self, y=None, optimize_kf=False, **kwargs):
+        if optimize_kf or not self.kf:
             self.optimize_kf()
-        return self.kf.filter(y=new_y, **kwargs)
+        y_obs = (self.y if y is None else y)
+        y_name = (y_obs.name or 'y')
+        return self.kf.filter(y=y_obs, **kwargs).rename(
+            columns={
+                'y': y_name, 'x': f'{y_name}_kf_state',
+                'v': f'{y_name}_kf_variance'
+            }
+        )
