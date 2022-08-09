@@ -55,7 +55,7 @@ class OptimizedEma(object):
                 )
             except FloatingPointError:
                 loglik = -np.inf
-        return (-2 * loglik + 2 * span)
+        return (-2 * loglik + np.log(test_size) * span)
 
     def calculate_ema(self, y=None, optimize_ewm_span=False, **kwargs):
         if optimize_ewm_span or not self.ewm_span:
