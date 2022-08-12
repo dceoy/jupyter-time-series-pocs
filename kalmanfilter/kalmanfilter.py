@@ -71,12 +71,15 @@ class KalmanFilter(object):
 
 
 class OptimizedKalmanFilter(object):
-    def __init__(self, y, x0=None, v0=None, q0=None, r0=None,
+    def __init__(self, y, test_size=None, x0=None, v0=None, q0=None, r0=None,
                  keep_history=False, q_bound=None, r_bound=None,
                  method='L-BFGS-B', **kwargs):
         self.__logger = logging.getLogger(__name__)
         assert (~np.isnan(y)).all(), f'y contains nan: {y}'
         self.y = y                                  # observation
+        self.test_size = (test_size or int(y.size / 2))
+        assert 0 < self.test_size <= y.size, f'invalid test size: {test_size}'
+        self.__logger.info(f'self.test_size: {self.test_size}')
         self.x0 = (y.mean() if x0 is None else x0)  # estimate of x
         y_var = y.var()
         self.v0 = (y_var if v0 is None else v0)     # error estimate
@@ -93,15 +96,17 @@ class OptimizedKalmanFilter(object):
         self.__keep_history = keep_history
         self.q = None
         self.r = None
-        self.kf = None
+        self.kf = KalmanFilter(
+            x0=self.x0, v0=self.v0, q=self.q0, r=self.r0,
+            keep_history=self.__keep_history
+        )
         self.__logger.debug('vars(self):' + os.linesep + pformat(vars(self)))
 
-    def optimize_kf(self):
-        np.seterr(all='raise')
+    def optimize_parameters(self):
         result = minimize(
             fun=self._loss, x0=np.array([self.q0, self.r0]),
-            args=(self.y, self.x0, self.v0), method=self.method,
-            bounds=[self.q_bound, self.r_bound],
+            args=(self.y.tail(self.test_size + 1), self.x0, self.v0),
+            method=self.method, bounds=[self.q_bound, self.r_bound],
             **self.scipy_optimize_minimize_add_kwargs
         )
         if result.success:
@@ -120,6 +125,7 @@ class OptimizedKalmanFilter(object):
         self.__logger.debug(
             'vars(self.kf):' + os.linesep + pformat(vars(self.kf))
         )
+        return self.q, self.r
 
     @staticmethod
     def _loss(x, *args):
@@ -130,9 +136,9 @@ class OptimizedKalmanFilter(object):
                 x0=args[1], v0=args[2], q=x[0], r=x[1], keep_history=False
             ).calculate_log_likelihood(y=args[0])
 
-    def filter(self, y=None, optimize_kf=False, **kwargs):
-        if optimize_kf or not self.kf:
-            self.optimize_kf()
+    def filter(self, y=None, optimize_parameters=False, **kwargs):
+        if optimize_parameters or not self.kf:
+            self.optimize_parameters()
         y_obs = (self.y if y is None else y)
         y_name = (y_obs.name or 'y')
         return self.kf.filter(y=y_obs, **kwargs).rename(
