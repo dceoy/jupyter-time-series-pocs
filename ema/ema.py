@@ -25,10 +25,9 @@ class OptimizedEma(object):
         self.__logger.debug('vars(self):' + os.linesep + pformat(vars(self)))
 
     def optimize_ewm_span(self):
-        np.seterr(all='raise')
         result = brute(
             func=self._loss, ranges=(self.ewm_span_range,),
-            args=(self.y.tail(self.test_size + 1), self.ewm_add_kwargs),
+            args=(self.y.tail(self.test_size + 2), self.ewm_add_kwargs),
             finish=None, **self.scipy_optimize_brute_add_kwargs
         )
         self.__logger.info(f'result: {result}')
@@ -44,17 +43,19 @@ class OptimizedEma(object):
                          invalid='raise'):
             ewm = y.ewm(span=span, **ewm_add_kwargs)
             try:
-                loglik = np.sum(
-                    np.log(
-                        norm.pdf(
-                            x=y.iloc[1:], loc=ewm.mean().shift().iloc[1:],
-                            scale=ewm.std(ddof=1).shift().iloc[1:]
-                        )
-                    )
-                )
+                loglik = np.log(
+                    norm.pdf(
+                        x=y, loc=ewm.mean().shift(),
+                        scale=ewm.std(ddof=1).shift()
+                    )[2:]
+                ).sum()
             except FloatingPointError:
-                loglik = -np.inf
-        return (-2 * loglik + np.log(y.size - 1) * span)
+                loss = np.inf
+            else:
+                loss = (-2 * loglik + np.log(y.size - 1) * span)
+        logger = logging.getLogger(__name__)
+        logger.debug(f'x, loss: {x}, {loss}')
+        return loss
 
     def create_ewm(self, y=None, optimize_ewm_span=False, **kwargs):
         if optimize_ewm_span or not self.ewm_span:
