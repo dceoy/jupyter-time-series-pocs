@@ -37,6 +37,7 @@ class OptimizedEma(object):
 
     @staticmethod
     def _loss(x, *args):
+        logger = logging.getLogger(__name__)
         span = x[0]
         y, ewm_add_kwargs = args
         with np.errstate(divide='raise', over='raise', under='raise',
@@ -53,8 +54,7 @@ class OptimizedEma(object):
                 loss = np.inf
             else:
                 loss = (-2 * loglik + np.log(y.size - 1) * span)
-        logger = logging.getLogger(__name__)
-        logger.debug(f'x, loss: {x}, {loss}')
+        logger.info(f'x, loss: {x}, {loss}')
         return loss
 
     def create_ewm(self, y=None, optimize_ewm_span=False, **kwargs):
