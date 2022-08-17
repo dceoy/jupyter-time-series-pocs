@@ -10,8 +10,8 @@ from scipy.stats import norm
 
 
 class OptimizedEma(object):
-    def __init__(self, y, test_size=None, span_range=None, adjust=False,
-                 ignore_na=True, **kwargs):
+    def __init__(self, y, test_size=None, span_range=None, ic='aic',
+                 ewm_kw=None, **kwargs):
         self.__logger = logging.getLogger(__name__)
         self.y = y      # observation
         self.test_size = (test_size or int(y.size / 2))
@@ -19,16 +19,18 @@ class OptimizedEma(object):
         self.__logger.info(f'self.test_size: {self.test_size}')
         self.ewm_span_range = slice(*(span_range or (2, int(y.size / 2))), 1)
         self.__logger.info(f'self.ewm_span_range: {self.ewm_span_range}')
-        self.ewm_add_kwargs = {'adjust': adjust, 'ignore_na': ignore_na}
-        self.scipy_optimize_brute_add_kwargs = kwargs
+        assert ic in {'aic', 'bic'}, f'invalid ic: {ic}'
+        self.ic = ic
+        self.ewm_kw = (ewm_kw or dict())
+        self.scipy_optimize_brute_kw = kwargs
         self.ewm_span = None
         self.__logger.debug('vars(self):' + os.linesep + pformat(vars(self)))
 
     def optimize_ewm_span(self):
         result = brute(
             func=self._loss, ranges=(self.ewm_span_range,),
-            args=(self.y.tail(self.test_size + 2), self.ewm_add_kwargs),
-            finish=None, **self.scipy_optimize_brute_add_kwargs
+            args=(self.y.tail(self.test_size + 2), self.ic, self.ewm_kw),
+            finish=None, **self.scipy_optimize_brute_kw
         )
         self.__logger.info(f'result: {result}')
         self.ewm_span = int(result)
@@ -39,10 +41,10 @@ class OptimizedEma(object):
     def _loss(x, *args):
         logger = logging.getLogger(__name__)
         span = x[0]
-        y, ewm_add_kwargs = args
+        y, ic, ewm_kw = args
         with np.errstate(divide='raise', over='raise', under='raise',
                          invalid='raise'):
-            ewm = y.ewm(span=span, **ewm_add_kwargs)
+            ewm = y.ewm(span=span, **ewm_kw)
             try:
                 loglik = np.log(
                     norm.pdf(
@@ -53,7 +55,10 @@ class OptimizedEma(object):
             except FloatingPointError:
                 loss = np.inf
             else:
-                loss = (-2 * loglik + np.log(y.size - 1) * span)
+                loss = (
+                    -2 * loglik
+                    + (2 if ic == 'aic' else np.log(y.size - 2)) * span
+                )
         logger.info(f'x, loss: {x}, {loss}')
         return loss
 
@@ -61,7 +66,7 @@ class OptimizedEma(object):
         if optimize_ewm_span or not self.ewm_span:
             self.optimize_ewm_span()
         return (self.y if y is None else y).ewm(
-            span=self.ewm_span, **self.ewm_add_kwargs, **kwargs
+            span=self.ewm_span, **self.ewm_kw, **kwargs
         )
 
     def calculate_ema(self, y=None, **kwargs):
